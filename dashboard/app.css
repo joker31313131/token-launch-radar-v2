@@ -134,6 +134,7 @@ td .chains { font-size: 13px; color: var(--muted); }
 #charts .dot { fill: var(--accent); opacity: 0.65; }
 #charts .tick { font-size: 10px; fill: var(--muted); text-anchor: middle; }
 #charts .tick.end { text-anchor: end; }
+#charts .tick.start { text-anchor: start; }
 #charts .axislabel { font-size: 11px; fill: var(--muted); text-anchor: middle; }
 #charts .barlabel { font-size: 11px; fill: var(--ink); }
 #charts .bar { fill: #c9c4b8; }

@@ -338,7 +338,8 @@
     for (i = 0; i <= 4; i++) {
       t = minX + (maxX - minX) * i / 4;
       out.push('<line x1="' + X(t).toFixed(1) + '" y1="' + Y(minY) + '" x2="' + X(t).toFixed(1) + '" y2="' + Y(maxY) + '" class="grid"/>');
-      out.push('<text x="' + X(t).toFixed(1) + '" y="' + (H - 18) + '" class="tick">' + fmtUSD(Math.exp(t)) + '</text>');
+      var anchor = i === 0 ? 'start' : i === 4 ? 'end' : '';
+      out.push('<text x="' + X(t).toFixed(1) + '" y="' + (H - 18) + '" class="tick ' + anchor + '">' + fmtUSD(Math.exp(t)) + '</text>');
       t = minY + (maxY - minY) * i / 4;
       out.push('<line x1="' + X(minX) + '" y1="' + Y(t).toFixed(1) + '" x2="' + X(maxX) + '" y2="' + Y(t).toFixed(1) + '" class="grid"/>');
       out.push('<text x="' + (padL - 8) + '" y="' + (Y(t).toFixed(1) + 4) + '" class="tick end">' + fmtUSD(Math.exp(t)) + '</text>');
