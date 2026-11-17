@@ -1,6 +1,6 @@
-[![make.fun](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
-[![rank](https://make.fun/badge/token-radar-01/joker31313131/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01)
-[![reward](https://make.fun/badge/token-radar-01/joker31313131/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01)
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/joker31313131/token-launch-radar-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/joker31313131/token-launch-radar-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 # Token Launch Radar
 
@@ -116,3 +116,7 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 
 Two runs over the same snapshot write byte-identical outputs: the program is
 a pure function of the snapshot (no clock, no randomness, no network).
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=h7j0gh6r&utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
