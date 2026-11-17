@@ -90,6 +90,15 @@ const dashboardFiles = copyTree(join(REPO_ROOT, 'dashboard'), join(outDir, 'dash
 if (!dashboardFiles.includes('index.html')) fail('dashboard/ holds no index.html');
 if (!dashboardFiles.some((f) => f.endsWith('.css'))) fail('dashboard/ holds no .css file');
 if (!dashboardFiles.some((f) => f.endsWith('.js'))) fail('dashboard/ holds no .js file');
+// The judge reads the dashboard source whole only while it fits the dossier's
+// text cap (65,536 bytes). Hold the source to 64,000 bytes so the dossier's
+// own framing still fits, and fail loudly rather than hand in a dashboard
+// the judge only sees truncated.
+const DASHBOARD_SOURCE_BUDGET = 64_000;
+const dashboardBytes = dashboardFiles.reduce((sum, f) => sum + statSync(join(outDir, 'dashboard', f)).size, 0);
+if (dashboardBytes > DASHBOARD_SOURCE_BUDGET) {
+  fail(`dashboard source is ${dashboardBytes} bytes, over the ${DASHBOARD_SOURCE_BUDGET}-byte budget: the judge would see it truncated`);
+}
 
 const shots = copyTree(join(REPO_ROOT, 'screenshots'), join(outDir, 'screenshots'));
 if (shots.length < 3) fail(`screenshots/ holds ${shots.length} image(s): hand in 3, the board, a detail view and a filtered view`);
