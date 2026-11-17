@@ -9,27 +9,47 @@
 // a separate view showing the market's own market cap, never a modelled
 // value, so the two sets are visibly apart.
 //
-// THE IMPLIED VALUE FORMULA
-// Every row's implied value is a pure function of the snapshot's own figures,
-// stated here, in the README, and on the dashboard:
+// HOW THE MODEL IS CHOSEN
+// The scoring model is not hand-picked. lib/validate.ts tests 23 candidates
+// against the snapshot's own trading protocols in grouped 5-fold
+// cross-validation plus leave-one-group-out, under a pre-registered adoption
+// rule, and the board is scored with the winner — or with the first version's
+// model when no challenger passes the rule. The dashboard shows the whole
+// candidate table, so the choice is auditable. What the winner is depends on
+// the snapshot: the code below never assumes it.
 //
-//   implied_value_usd = tvl_usd x M(category) x G x A
+// THE SCORING FORM (whatever candidate wins, the shape is the same)
+//   implied_value_usd = tvl_usd x R x G x A
 //
-//   M(category)  the median market-cap-to-TVL ratio of the token-bearing
-//                protocols in the same category (only when at least
-//                MIN_CATEGORY_SAMPLE of them report both figures),
-//                otherwise the global median across every token-bearing
-//                protocol; clamped to [MULTIPLE_FLOOR, MULTIPLE_CAP].
-//                Both medians are computed from this snapshot at run time.
-//   G            growth: 1 + GROWTH_WEIGHT x clamp(change_7d, GROWTH_FLOOR,
-//                GROWTH_CAP) / 100. An unreported 7-day change counts as 0.
-//   A            maturity: MATURITY_FLOOR + (1 - MATURITY_FLOOR) x
-//                min(age_days, MATURITY_DAYS) / MATURITY_DAYS, where
-//                age_days runs from listed_at to the snapshot's as_of date.
-//                An unknown listing date counts as UNKNOWN_AGE_DAYS.
+//   R  the fitted multiple: a category median, a shrunk blend, the global
+//      median, or a size curve's ratio at this TVL — whichever the validation
+//      selected. Clamped to [MULTIPLE_FLOOR, MULTIPLE_CAP].
+//   G  growth: 1 + growth_weight x clamp(change_7d, GROWTH_FLOOR,
+//      GROWTH_CAP) / 100. An unreported 7-day change counts as 0.
+//   A  maturity: maturity_floor + (1 - maturity_floor) x
+//      min(age_days, MATURITY_DAYS) / MATURITY_DAYS, where age_days runs from
+//      listed_at to the snapshot's as_of date. An unknown listing date is
+//      handled as the selected spec says.
 //
 // No protocol name is ever special-cased: the same function scores every row,
-// and the only per-category input is the median the snapshot itself yields.
+// and the only per-category input is what the snapshot itself yields.
+
+import {
+  deduplicate,
+  evalSetup,
+  fitCandidate,
+  growthFactor,
+  maturityFactor,
+  rankRanges,
+  reportersOf,
+  scatterPoints,
+  selectModel,
+  trainMedianAgeOf,
+  type CandidateResult,
+  type CandidateSpec,
+  type FittedModel,
+  type CalibrationFit,
+} from './validate.ts';
 
 /** One protocol entry: exactly the ten fields the sealed snapshot carries. */
 export interface SnapshotProtocol {
@@ -83,7 +103,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-median-1';
+export const MODEL_VERSION = 'radar-validated-2';
 
 /** Early rows added below the watchlist floor, by implied value. */
 export const EARLY_ROWS = 160;
@@ -135,85 +155,48 @@ export function isEarlyEligible(p: SnapshotProtocol): boolean {
   return isPreToken(p) && p.category !== 'CEX' && !VERSIONED_NAME.test(p.name);
 }
 
-/** One category's calibrated multiple: its median mcap/TVL and how many protocols set it. */
-export interface CategoryMultiple {
-  category: string;
-  multiple: number;
-  sample: number;
-}
-
-/** Everything the calibration learned from the snapshot, so the dashboard can show its work. */
-export interface Calibration {
-  global_median: number;
-  global_sample: number;
-  categories: CategoryMultiple[];
-}
-
-/**
- * Calibrate the multiples from the snapshot itself: for every category with
- * at least MIN_CATEGORY_SAMPLE token-bearing protocols, the median of their
- * mcap_usd / tvl_usd; plus the global median over all token-bearing
- * protocols as the fallback. Ratios use only protocols reporting both a
- * market cap and a positive TVL.
- */
-export function calibrate(snapshot: Snapshot, model: ModelConstants = MODEL): Calibration {
-  const byCategory = new Map<string, number[]>();
-  const all: number[] = [];
-  for (const p of snapshot.protocols) {
-    if (p.mcap_usd === null || p.tvl_usd <= 0) continue;
-    const ratio = p.mcap_usd / p.tvl_usd;
-    if (!Number.isFinite(ratio) || ratio <= 0) continue;
-    all.push(ratio);
-    const key = p.category ?? 'Uncategorized';
-    const list = byCategory.get(key) ?? [];
-    list.push(ratio);
-    byCategory.set(key, list);
-  }
-  if (all.length === 0) throw new SnapshotError('snapshot holds no token-bearing protocol to calibrate from');
-  const categories: CategoryMultiple[] = [];
-  for (const [category, ratios] of [...byCategory.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-    if (ratios.length < model.min_category_sample) continue;
-    categories.push({ category, multiple: round4(clamp(median(ratios), model.multiple_floor, model.multiple_cap)), sample: ratios.length });
-  }
-  return { global_median: round4(clamp(median(all), model.multiple_floor, model.multiple_cap)), global_sample: all.length, categories };
-}
-
-/** The multiple one protocol gets, and whether its own category set it. */
-export function multipleFor(p: SnapshotProtocol, calibration: Calibration): { multiple: number; from_category: boolean } {
-  const hit = calibration.categories.find((c) => c.category === (p.category ?? 'Uncategorized'));
-  if (hit !== undefined) return { multiple: hit.multiple, from_category: true };
-  return { multiple: calibration.global_median, from_category: false };
-}
+// ---------------------------------------------------------------- scoring
 
 /** The full scoring breakdown of one protocol, so the dashboard can show every factor. */
 export interface ScoreBreakdown {
   implied_value_usd: number;
   multiple: number;
   multiple_from_category: boolean;
+  /** Where the multiple came from: category, global, shrunk, curve, curve-offset, curve-seg. */
+  multiple_kind: string;
+  /** Shrinkage weight on the category's own median; null when not shrunk. */
+  multiple_w: number | null;
+  /** Reporters (or groups) behind the multiple; null when not applicable. */
+  multiple_n: number | null;
   growth_pct: number;
   growth_multiplier: number;
   maturity_multiplier: number;
   age_days: number | null;
 }
 
-/** Score one protocol under the calibrated model. */
-export function scoreProtocol(
+/** Score one protocol under a fitted model and the selected spec. */
+export function scoreWithFit(
   p: SnapshotProtocol,
   asOf: string,
-  calibration: Calibration,
+  fit: FittedModel,
+  spec: CandidateSpec,
+  trainMedianAge: number,
   model: ModelConstants = MODEL,
 ): ScoreBreakdown {
-  const { multiple, from_category } = multipleFor(p, calibration);
+  const category = p.category ?? 'Uncategorized';
+  const desc = fit.describe(p.tvl_usd, category);
   const growthPct = clamp(typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : 0, model.growth_floor_pct, model.growth_cap_pct);
-  const growthMultiplier = 1 + model.growth_weight * (growthPct / 100);
+  const growthMultiplier = growthFactor(p.change_7d, spec, model);
   const age = ageDays(asOf, p.listed_at);
-  const ageForModel = age ?? model.unknown_age_days;
-  const maturityMultiplier = model.maturity_floor + (1 - model.maturity_floor) * (clamp(ageForModel, 0, model.maturity_days) / model.maturity_days);
-  const implied = Math.max(1, Math.round(p.tvl_usd * multiple * growthMultiplier * maturityMultiplier));
+  const maturityMultiplier = maturityFactor(age, spec, model, trainMedianAge);
+  const implied = Math.max(1, Math.round(p.tvl_usd * desc.multiple * growthMultiplier * maturityMultiplier));
   return {
     implied_value_usd: implied,
-    multiple,
-    multiple_from_category: from_category,
+    multiple: desc.multiple,
+    multiple_from_category: desc.kind === 'category',
+    multiple_kind: desc.kind,
+    multiple_w: desc.w,
+    multiple_n: desc.n,
     growth_pct: round4(growthPct),
     growth_multiplier: round4(growthMultiplier),
     maturity_multiplier: round4(maturityMultiplier),
@@ -239,12 +222,21 @@ export interface BoardRow {
   age_days: number | null;
   implied_value_usd: number;
   model: ScoreBreakdown;
+  /** Leave-one-group-out rank range: sensitivity to one calibration group, not prediction error. */
+  rank_lo: number;
+  rank_hi: number;
   farm_steps: string[];
 }
 
-/** Build the ranked board: every watchlist slug, then the best early rows below the floor. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
-  const calibration = calibrate(snapshot, model);
+/** Build the ranked board under a fitted model: every watchlist slug, then the best early rows below the floor. */
+export function buildBoard(
+  snapshot: Snapshot,
+  fit: FittedModel,
+  spec: CandidateSpec,
+  trainMedianAge: number,
+  ranges: Map<string, { lo: number; hi: number }>,
+  model: ModelConstants = MODEL,
+): BoardRow[] {
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   for (const slug of snapshot.watchlist) {
@@ -255,33 +247,38 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   // same implied value the board uses, so the radar's finds compete on value.
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isEarlyEligible(p) && p.tvl_usd < snapshot.floor_usd)
-    .map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, calibration, model) }))
+    .map((p) => ({ p, score: scoreWithFit(p, snapshot.as_of, fit, spec, trainMedianAge, model) }))
     .sort((a, b) => b.score.implied_value_usd - a.score.implied_value_usd || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0))
     .slice(0, EARLY_ROWS);
   for (const { p } of early) chosen.set(p.slug, p);
 
-  const scored = [...chosen.values()].map((p) => ({ p, score: scoreProtocol(p, snapshot.as_of, calibration, model) }));
+  const scored = [...chosen.values()].map((p) => ({ p, score: scoreWithFit(p, snapshot.as_of, fit, spec, trainMedianAge, model) }));
   scored.sort((a, b) => b.score.implied_value_usd - a.score.implied_value_usd || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const watchlist = new Set(snapshot.watchlist);
-  return scored.map((s, i) => ({
-    rank: i + 1,
-    slug: s.p.slug,
-    name: s.p.name,
-    category: s.p.category,
-    chains: s.p.chains,
-    tvl_usd: s.p.tvl_usd,
-    change_7d: s.p.change_7d,
-    mcap_usd: s.p.mcap_usd,
-    listed_at: s.p.listed_at,
-    gecko_id: s.p.gecko_id,
-    symbol: s.p.symbol,
-    token_status: 'pre-token',
-    on_watchlist: watchlist.has(s.p.slug),
-    age_days: s.score.age_days,
-    implied_value_usd: s.score.implied_value_usd,
-    model: s.score,
-    farm_steps: farmSteps(s.p, s.score.age_days),
-  }));
+  return scored.map((s, i) => {
+    const range = ranges.get(s.p.slug) ?? { lo: i + 1, hi: i + 1 };
+    return {
+      rank: i + 1,
+      slug: s.p.slug,
+      name: s.p.name,
+      category: s.p.category,
+      chains: s.p.chains,
+      tvl_usd: s.p.tvl_usd,
+      change_7d: s.p.change_7d,
+      mcap_usd: s.p.mcap_usd,
+      listed_at: s.p.listed_at,
+      gecko_id: s.p.gecko_id,
+      symbol: s.p.symbol,
+      token_status: 'pre-token',
+      on_watchlist: watchlist.has(s.p.slug),
+      age_days: s.score.age_days,
+      implied_value_usd: s.score.implied_value_usd,
+      model: s.score,
+      rank_lo: range.lo,
+      rank_hi: range.hi,
+      farm_steps: farmSteps(s.p, s.score.age_days),
+    };
+  });
 }
 
 // ---------------------------------------------------------------- farm plans
@@ -409,6 +406,50 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 
 // ---------------------------------------------------------------- dashboard data
 
+/** The validation evidence the dashboard shows: every candidate, every number, the rule, the caveats. */
+export interface ValidationData {
+  reporter_rows: number;
+  groups: number;
+  merges_tier1: number;
+  merges_tier2: number;
+  spread_flagged: number;
+  fold_sizes: number[];
+  candidates: CandidateResult[];
+  baseline_id: string;
+  winner_id: string;
+  winner_is_baseline: boolean;
+  notes: string[];
+}
+
+/** How repetitive the farm plans are, measured from the board itself. */
+export interface FarmMetrics {
+  total_steps: number;
+  distinct_steps: number;
+  distinct_ratio: number;
+  per_step_distinct: number[];
+  min_len: number;
+  max_len: number;
+}
+
+export function farmMetricsOf(board: BoardRow[]): FarmMetrics {
+  const all: string[] = [];
+  for (const r of board) all.push(...r.farm_steps);
+  const perStep: number[] = [];
+  const maxSteps = Math.max(...board.map((r) => r.farm_steps.length));
+  for (let i = 0; i < maxSteps; i++) {
+    perStep.push(new Set(board.map((r) => r.farm_steps[i]).filter((s): s is string => s !== undefined)).size);
+  }
+  const lens = all.map((s) => s.trim().length);
+  return {
+    total_steps: all.length,
+    distinct_steps: new Set(all).size,
+    distinct_ratio: Math.round((new Set(all).size / all.length) * 1000) / 1000,
+    per_step_distinct: perStep,
+    min_len: Math.min(...lens),
+    max_len: Math.max(...lens),
+  };
+}
+
 /** Everything the dashboard renders: the board, the live set, and the model that scored them. */
 export interface RadarData {
   as_of: string;
@@ -416,7 +457,15 @@ export interface RadarData {
   floor_usd: number;
   model: ModelConstants;
   model_version: string;
-  calibration: Calibration;
+  model_description: string;
+  final_spec: { id: string; calibration: string; use_dedup: boolean; growth_weight: number; maturity_floor: number; unknown_age: string };
+  calibration: CalibrationFit;
+  validation: ValidationData;
+  scatter: Array<{ x: number; y: number; c: string }>;
+  /** The winning curve as log-log polyline points, or null when the winner is not a curve. */
+  curve_points: Array<{ x: number; y: number }> | null;
+  median_line: number;
+  farm_metrics: FarmMetrics;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -425,12 +474,72 @@ export interface RadarData {
   live: LiveRow[];
 }
 
+/** One honest sentence describing the selected model, for the dashboard header. */
+export function describeSpec(spec: CandidateSpec, winnerIsBaseline: boolean): string {
+  const cal =
+    spec.calibration === 'category'
+      ? 'the category median mcap/TVL (at least 5 reporters), otherwise the global median'
+      : spec.calibration === 'flat'
+        ? 'the global median mcap/TVL'
+        : spec.calibration === 'shrink-n'
+          ? `a shrunk blend of the category and global medians (k=${spec.shrinkK ?? 5})`
+          : spec.calibration === 'shrink-var'
+            ? 'a variance-ratio shrunk blend of the category and global medians'
+            : spec.calibration === 'shrink-trim'
+              ? 'a shrunk blend toward the trimmed-mean multiple'
+              : spec.calibration === 'curve-ols'
+                ? 'a log-log OLS size curve'
+                : spec.calibration === 'curve-theilsen'
+                  ? 'a Theil–Sen size curve'
+                  : spec.calibration === 'curve-huber'
+                    ? 'a Huber size curve'
+                    : spec.calibration === 'curve-offset'
+                      ? 'a log-log OLS size curve with shrunk category offsets'
+                      : 'a two-segment log-log size curve';
+  const dedup = spec.useDedup ? ', fitted on deduplicated token groups' : '';
+  const kept = winnerIsBaseline ? " — the first version's model, kept because no challenger passed the adoption rule" : '';
+  return `implied value = TVL × M × growth × maturity, where M is ${cal}${dedup}, growth weight ${spec.growthWeight}, maturity floor ${spec.maturityFloor}${kept}.`;
+}
+
 /** Build the board and the dashboard's dataset from the snapshot in one pass. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
-  const calibration = calibrate(snapshot, model);
+  const points = reportersOf(snapshot);
+  const dedup = deduplicate(points);
+  const setup = evalSetup(points, dedup.groups);
+  const selection = selectModel(setup, model);
+  const finalSpec = selection.finalSpec;
+  const finalFit = fitCandidate(finalSpec, points, dedup.groups, model);
+  const medAge = trainMedianAgeOf(points);
+
+  // Rank ranges need the board's rows first: score once without ranges to fix
+  // membership, then re-rank under each leave-one-group-out refit.
+  const emptyRanges = new Map<string, { lo: number; hi: number }>();
+  const draft = buildBoard(snapshot, finalFit, finalSpec, medAge, emptyRanges, model);
+  const ranges = rankRanges(
+    finalSpec,
+    setup,
+    draft.map((r) => ({ slug: r.slug, tvl_usd: r.tvl_usd, category: r.category, change_7d: r.change_7d, age_days: r.age_days })),
+    model,
+  );
+  const board = buildBoard(snapshot, finalFit, finalSpec, medAge, ranges, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !r.on_watchlist).length;
+
+  // The winning curve as a polyline across the reporters' TVL range, when the
+  // winner is a curve; the empty category falls through to the base curve.
+  let curvePoints: Array<{ x: number; y: number }> | null = null;
+  if (finalFit.calibration.kind === 'curve') {
+    const logTvls = points.map((p) => Math.log(p.tvl));
+    const lo = Math.min(...logTvls);
+    const hi = Math.max(...logTvls);
+    curvePoints = [];
+    for (let i = 0; i < 24; i++) {
+      const x = lo + ((hi - lo) * i) / 23;
+      const tvl = Math.exp(x);
+      curvePoints.push({ x: Math.round(x * 1000) / 1000, y: Math.round(Math.log(finalFit.ratioFor(tvl, '') * tvl) * 1000) / 1000 });
+    }
+  }
+
   return {
     board,
     radar: {
@@ -439,7 +548,35 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       floor_usd: snapshot.floor_usd,
       model,
       model_version: MODEL_VERSION,
-      calibration,
+      model_description: describeSpec(finalSpec, selection.winnerIsBaseline),
+      final_spec: {
+        id: finalSpec.id,
+        calibration: finalSpec.calibration,
+        use_dedup: finalSpec.useDedup,
+        growth_weight: finalSpec.growthWeight,
+        maturity_floor: finalSpec.maturityFloor,
+        unknown_age: finalSpec.unknownAge,
+      },
+      calibration: finalFit.calibration,
+      validation: {
+        reporter_rows: points.length,
+        groups: dedup.groups.length,
+        merges_tier1: dedup.mergesTier1,
+        merges_tier2: dedup.mergesTier2,
+        spread_flagged: dedup.spreadFlagged,
+        fold_sizes: setup.foldSizes,
+        candidates: selection.results,
+        baseline_id: 'baseline-v1',
+        winner_id: selection.winnerSpec.id,
+        winner_is_baseline: selection.winnerIsBaseline,
+        notes: selection.notes,
+      },
+      scatter: scatterPoints(points),
+      curve_points: curvePoints,
+      // The chart's flat reference is always the plain global median of the
+      // reporter ratios — not the fit's target, which a trimmed variant moves.
+      median_line: round4(clamp(median(points.map((p) => p.ratio)), model.multiple_floor, model.multiple_cap)),
+      farm_metrics: farmMetricsOf(board),
       watchlist_size: snapshot.watchlist.length,
       board_size: board.length,
       early_size: early,
