@@ -50,6 +50,9 @@ import {
   type FittedModel,
   type CalibrationFit,
 } from './validate.ts';
+import { farmSteps, maskTemplate } from './farm.ts';
+
+export { farmSteps } from './farm.ts';
 
 /** One protocol entry: exactly the ten fields the sealed snapshot carries. */
 export interface SnapshotProtocol {
@@ -281,97 +284,6 @@ export function buildBoard(
   });
 }
 
-// ---------------------------------------------------------------- farm plans
-
-/** Capital for one farm position, sized by the protocol's own TVL tier. */
-function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 1_000_000_000) return 250;
-  if (p.tvl_usd >= 100_000_000) return 150;
-  return 75;
-}
-
-/** How long to keep the position open, from the protocol's age: younger records get a longer window. */
-function holdDaysFor(age: number | null): number {
-  if (age === null) return 60;
-  if (age < 180) return 90;
-  if (age < 365) return 60;
-  return 45;
-}
-
-/** The main chain the protocol names, or a neutral phrase when it names none. */
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
-}
-
-/**
- * The category's core action, in words a farmer can follow. The action comes
- * from the category and the chains the snapshot records — never from a
- * hand-written fact about one protocol — and every cost and time is an
- * estimate, labelled as one.
- */
-function coreActionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) {
-    return `Supply $${capital} of USDC to ${name}'s lending market on ${chain} and leave the supply open so the position accrues over time`;
-  }
-  if (c.includes('dex') || c.includes('swap') || c.includes('liquidity manager')) {
-    return `Provide $${capital} of liquidity to ${name}'s largest pool on ${chain} and keep the position in range`;
-  }
-  if (c.includes('bridge')) {
-    return `Bridge $${capital} of USDC through ${name} onto ${chain}, then use the bridged funds inside the destination app`;
-  }
-  if (c.includes('stak') || c.includes('restak')) {
-    return `Stake $${capital} of the chain's staking asset through ${name} on ${chain} and keep the receipt token in the same wallet`;
-  }
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) {
-    return `Deposit $${capital} of USDC as margin on ${name} and open one small hedged position, then close it the same week`;
-  }
-  if (c.includes('yield') || c.includes('vault') || c.includes('curator') || c.includes('allocator')) {
-    return `Deposit $${capital} into one of ${name}'s vaults on ${chain} and hold the vault shares in the farming wallet`;
-  }
-  if (c.includes('stable')) {
-    return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain} and hold it for the full window`;
-  }
-  if (c.includes('rwa') || c.includes('real world')) {
-    return `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it in the farming wallet`;
-  }
-  if (c.includes('insurance')) {
-    return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active for the full window`;
-  }
-  if (c.includes('prediction')) {
-    return `Fund the wallet with $${capital} and place one position on an active ${name} market on ${chain}`;
-  }
-  if (c.includes('basis')) {
-    return `Deposit $${capital} into ${name}'s basis strategy on ${chain} and keep the position open for the full window`;
-  }
-  return `Deposit $${capital} of USDC into ${name}'s main product on ${chain} and keep the position open`;
-}
-
-/**
- * A protocol's farm plan: six steps, each an action with an estimated cost
- * and time. Derived only from the protocol's category, chains, TVL and age.
- */
-export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
-  const chain = chainOf(p);
-  const capital = capitalFor(p);
-  const hold = holdDaysFor(age);
-  const steps = [
-    `Set up a fresh wallet that holds only the funds you plan to farm, and store its recovery phrase offline, never in a screenshot or chat. Estimated cost: nothing to create the wallet. Estimated time: 10 minutes.`,
-    `${coreActionFor(p, capital, chain)}. Estimated cost: $${capital} of capital plus an estimated $2 to $8 of gas. Estimated time: 20 minutes to set up.`,
-    `Repeat one on-chain action each week, such as a deposit, a borrow, a swap, or a vote, so the wallet shows steady use instead of a single day of activity. Estimated cost: about $2 of gas per week (estimate). Estimated time: 10 minutes per week.`,
-    `Once a month, open the points or rewards page the protocol itself publishes and check the wallet's standing there; claim only from the protocol's own page, and never pay anyone to claim for you. Estimated cost: nothing to check. Estimated time: 10 minutes.`,
-    `Keep the position open for at least ${hold} days so the activity spans more than one snapshot window, and avoid withdrawing everything at once near a window's end. Estimated cost: the $${capital} stays in the position. Estimated time: ${hold} days.`,
-    `Log the wallet address, the dates, and every transaction hash in a notebook, and decide the exit before you need it: unwind in one transaction and keep the receipt. Estimated cost: nothing but the log. Estimated time: 5 minutes.`,
-  ];
-  // The gate holds every step to 20..600 characters once trimmed: keep each
-  // step inside it by construction, and guard the bound here.
-  return steps.map((s) => {
-    const t = s.trim();
-    return t.length > 600 ? `${t.slice(0, 597)}...` : t;
-  });
-}
-
 // ---------------------------------------------------------------- live view
 
 /** A protocol whose token already trades: the board shows the market's own value, never a model's. */
@@ -426,6 +338,9 @@ export interface FarmMetrics {
   total_steps: number;
   distinct_steps: number;
   distinct_ratio: number;
+  /** Distinct plan shapes with names, chains, and numbers masked out — the honest variety measure. */
+  template_distinct: number;
+  template_ratio: number;
   per_step_distinct: number[];
   min_len: number;
   max_len: number;
@@ -433,17 +348,25 @@ export interface FarmMetrics {
 
 export function farmMetricsOf(board: BoardRow[]): FarmMetrics {
   const all: string[] = [];
-  for (const r of board) all.push(...r.farm_steps);
+  const templates: string[] = [];
+  for (const r of board) {
+    all.push(...r.farm_steps);
+    for (const s of r.farm_steps) templates.push(maskTemplate(s, r.name, r.chains));
+  }
   const perStep: number[] = [];
   const maxSteps = Math.max(...board.map((r) => r.farm_steps.length));
   for (let i = 0; i < maxSteps; i++) {
     perStep.push(new Set(board.map((r) => r.farm_steps[i]).filter((s): s is string => s !== undefined)).size);
   }
   const lens = all.map((s) => s.trim().length);
+  const distinct = new Set(all).size;
+  const templateDistinct = new Set(templates).size;
   return {
     total_steps: all.length,
-    distinct_steps: new Set(all).size,
-    distinct_ratio: Math.round((new Set(all).size / all.length) * 1000) / 1000,
+    distinct_steps: distinct,
+    distinct_ratio: Math.round((distinct / all.length) * 1000) / 1000,
+    template_distinct: templateDistinct,
+    template_ratio: Math.round((templateDistinct / all.length) * 1000) / 1000,
     per_step_distinct: perStep,
     min_len: Math.min(...lens),
     max_len: Math.max(...lens),
