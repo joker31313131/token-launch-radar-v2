@@ -12,8 +12,8 @@
     <p class="kicker">Token launch radar</p>
     <h1>Which pre-token protocol is worth farming next?</h1>
     <p class="lede" id="lede">Loading the sealed snapshot…</p>
-    <p class="formula">implied value = TVL × M(category) × growth × maturity
-      <span class="formula-note">M is the median market-cap-to-TVL ratio of the same category's trading tokens, calibrated from this snapshot. <a href="#model">How the value is scored</a></span>
+    <p class="formula"><span id="formula-text">implied value = TVL × M(category) × growth × maturity</span>
+      <span class="formula-note">M is calibrated from this snapshot's own trading protocols — no protocol name is special-cased. <a href="#model">How the value is scored</a> · <a href="#validation">Validation evidence</a></span>
     </p>
   </div>
 </header>
@@ -74,13 +74,10 @@
 
   <section id="model" class="model">
     <h2>How the value is scored</h2>
-    <p>Every implied value is a pure function of the snapshot's own figures. No protocol name is special-cased; the same function scores every row.</p>
-    <ol class="formula-steps">
-      <li><strong>M(category)</strong> — the median market-cap-to-TVL ratio of the token-bearing protocols in the same category (at least 5 of them), otherwise the global median across all token-bearing protocols. Clamped to [0.05, 0.75].</li>
-      <li><strong>Growth</strong> — 1 + 0.5 × clamp(7-day TVL change, −40%, +60%) ÷ 100. An unreported change counts as 0.</li>
-      <li><strong>Maturity</strong> — 0.7 + 0.3 × min(age in days, 730) ÷ 730, from the listing date to the snapshot date. An unknown listing date counts as 365 days.</li>
-    </ol>
+    <p>Every implied value is a pure function of the snapshot's own figures. The scoring model was chosen by grouped cross-validation over the snapshot's trading protocols — the <a href="#validation">validation section</a> shows every candidate tested and why this one won. No protocol name is special-cased; the same function scores every row.</p>
+    <ol class="formula-steps" id="formula-steps"></ol>
     <div id="calibration"></div>
+    <div id="farm-metrics"></div>
     <form id="sandbox" class="sandbox">
       <h3>Try the model</h3>
       <p>Change the constants and re-score the board in this page. The submitted board always uses the constants above.</p>
@@ -90,6 +87,14 @@
       <button type="submit">Re-score the board</button>
       <button type="button" id="sb-reset">Reset</button>
     </form>
+  </section>
+
+  <section id="validation" class="model validation">
+    <h2>Validation: how the model was chosen</h2>
+    <div id="validation-summary"></div>
+    <div id="charts"></div>
+    <div id="candidate-table"></div>
+    <div id="caveats"></div>
   </section>
 
   <footer>

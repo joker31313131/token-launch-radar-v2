@@ -382,6 +382,8 @@ export interface RadarData {
   model_version: string;
   model_description: string;
   final_spec: { id: string; calibration: string; use_dedup: boolean; growth_weight: number; maturity_floor: number; unknown_age: string };
+  /** Median known age of the calibration reporters, in days — the sandbox's unknown-age value when the spec says 'median'. */
+  train_median_age: number;
   calibration: CalibrationFit;
   validation: ValidationData;
   scatter: Array<{ x: number; y: number; c: string }>;
@@ -480,6 +482,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
         maturity_floor: finalSpec.maturityFloor,
         unknown_age: finalSpec.unknownAge,
       },
+      train_median_age: medAge,
       calibration: finalFit.calibration,
       validation: {
         reporter_rows: points.length,

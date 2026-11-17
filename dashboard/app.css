@@ -100,16 +100,44 @@ td .chains { font-size: 13px; color: var(--muted); }
 .detail li { margin-bottom: 8px; }
 .detail .close { float: right; font: inherit; font-size: 13px; cursor: pointer; background: none; border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
 .token-note { font-size: 13px; color: var(--muted); }
+.rank-range { font-size: 13px; background: var(--accent-soft); border-radius: var(--radius); padding: 8px 12px; }
 
 /* Model section */
 .model { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 24px; margin: 24px 0; }
 .model h2 { margin: 0 0 8px; font-size: 20px; }
+.model h3 { margin: 20px 0 8px; font-size: 16px; }
 .model p { margin: 0 0 12px; max-width: 860px; }
 .formula-steps { margin: 0 0 16px; padding-left: 22px; max-width: 860px; }
 .formula-steps li { margin-bottom: 8px; }
 #calibration table { font-size: 13px; }
 #calibration td, #calibration th { padding: 6px 10px; }
 #calibration tbody tr { cursor: default; }
+#farm-metrics h3 { margin-top: 20px; }
+
+/* Validation section */
+.validation ul.notes { margin: 0 0 12px; padding-left: 22px; max-width: 860px; }
+.validation ul.notes li { margin-bottom: 6px; }
+#candidate-table table { font-size: 13px; }
+#candidate-table td, #candidate-table th { padding: 6px 10px; }
+#candidate-table tbody tr { cursor: default; }
+#candidate-table tr.adopted { background: var(--accent-soft); font-weight: 600; }
+#candidate-table .footnote { font-size: 12px; color: var(--muted); margin-top: 8px; }
+#caveats ul { margin: 0; padding-left: 22px; max-width: 860px; }
+#caveats li { margin-bottom: 8px; }
+#charts figure { margin: 0 0 20px; max-width: 680px; }
+#charts figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
+#charts svg { width: 100%; height: auto; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }
+#charts .grid { stroke: #e6e2d8; stroke-width: 1; }
+#charts .axis { stroke: var(--muted); stroke-width: 1; }
+#charts .medianline { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 5 4; }
+#charts .curveline { stroke: var(--accent); stroke-width: 2; fill: none; }
+#charts .dot { fill: var(--accent); opacity: 0.65; }
+#charts .tick { font-size: 10px; fill: var(--muted); text-anchor: middle; }
+#charts .tick.end { text-anchor: end; }
+#charts .axislabel { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+#charts .barlabel { font-size: 11px; fill: var(--ink); }
+#charts .bar { fill: #c9c4b8; }
+#charts .bar.adopted { fill: var(--accent); }
 .sandbox { border-top: 1px solid var(--line); padding-top: 16px; display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 2); align-items: end; }
 .sandbox h3, .sandbox p { flex-basis: 100%; margin: 0; }
 .sandbox h3 { font-size: 16px; }
